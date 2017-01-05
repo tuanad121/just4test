@@ -1,14 +1,19 @@
 function source_object = D4C(x, fs, f0_object, option)
 % Band-aperiodicity estimation based on D4C
+% source_object = D4C(x, fs, f0_object, option);
 % source_object = D4C(x, fs, f0_object);
 %
 % Input
 %   x  : input signal
 %   fs : sampling frequency
 %   f0_object : F0 information object
-%   threshold : It is used for D4C Love Train (from 0 to 1).
+%   option    : It has two parameters (threshold and fft_size)
+%               Parameter threshold is used for D4C Love Train (from 0 to 1).
 %               Default parameter is 0.85.
 %               You can use conventional D4C by setting the parameter to 0.
+%               Parameter fft_size is used when you modified the fft_size
+%               in CheapTrick(). The same value is required to synthesize
+%               the waveform.
 %
 % Output
 %   source_object : estimated band-aperiodicity.
@@ -17,18 +22,24 @@ function source_object = D4C(x, fs, f0_object, option)
 % 2016/12/26 : D4C Love Train is implemented.
 % 2016/12/28 : Refactoring
 % 2016/12/31 : Minor bugs and a lengthy processing were fixed.
+% 2017/01/02 : Minor bugs were fixed.
 
+% set default parameters
+f0_low_limit = 47;
+fft_size = 2 ^ ceil(log2(4 * fs / f0_low_limit + 1));
+% The size of aperiodicity must be the same as that of spectrogram.
+f0_low_limit_for_spectrum = 71;
+fft_size_for_spectrum =...
+  2 ^ ceil(log2(3 * fs / f0_low_limit_for_spectrum + 1));
 threshold = 0.85;
 if nargin == 4
   if isfield(option, 'threshold') == 1
     threshold = option.threshold;
   end;
+  if isfield(option, 'fft_size') == 1
+    fft_size_for_spectrum = option.fft_size;
+  end;
 end;
-
-% set default parameters
-f0_low_limit = 71;
-fft_size = 2 ^ ceil(log2(4 * fs / f0_low_limit + 1));
-fft_size_for_spectrum = 2 ^ ceil(log2(3 * fs / f0_low_limit + 1));
 upper_limit = 15000;
 frequency_interval = 3000;
 
@@ -40,7 +51,7 @@ if isfield(f0_object, 'vuv')
   f0(f0_object.vuv == 0) = 0;
 end;
 
-number_of_aperiodicity =...
+number_of_aperiodicities =...
   floor(min(upper_limit, fs / 2 - frequency_interval) / frequency_interval);
 
 % The window function used for the CalculateFeature() is designed here to
@@ -49,23 +60,22 @@ window_length = floor(frequency_interval / (fs / fft_size)) * 2 + 1;
 window = nuttall(window_length);
 
 aperiodicity = zeros(fft_size_for_spectrum / 2 + 1, length(f0));
-ap_debug = zeros(number_of_aperiodicity, length(f0));
+ap_debug = zeros(number_of_aperiodicities, length(f0));
 
 frequency_axis = (0 : fft_size_for_spectrum / 2) * fs / fft_size_for_spectrum;
-coarse_axis = [(0 : number_of_aperiodicity) * frequency_interval, fs / 2]';
+coarse_axis = [(0 : number_of_aperiodicities) * frequency_interval, fs / 2]';
 
-lowest_f0 = 40;
-fft_size = 2 ^ ceil(log2(4 * fs / f0_low_limit + 1));
 for i = 1 : length(f0)
-  if D4CLoveTrain(x, fs, f0(i), temporal_positions(i), lowest_f0, threshold) == 0
+  if D4CLoveTrain(x, fs, f0(i), temporal_positions(i), threshold) == 0
     aperiodicity(:, i) = 1 - 0.000000000001;
     continue;
   end;
-  coarse_aperiodicity = EstimateOneSlice(x, fs, f0(i),...
+  current_f0 =  max(f0_low_limit, f0(i));
+  coarse_aperiodicity = EstimateOneSlice(x, fs, current_f0,...
     frequency_interval, temporal_positions(i), fft_size,...
-    number_of_aperiodicity, window);
+    number_of_aperiodicities, window);
   coarse_aperiodicity =...
-    max(0, coarse_aperiodicity - (f0(i) - 100) * 2 / 100);
+    max(0, coarse_aperiodicity - (current_f0 - 100) * 2 / 100);
   ap_debug(:, i) = -coarse_aperiodicity; % for debug;
   
   aperiodicity(:, i) = 10 .^...
@@ -77,16 +87,17 @@ source_object.aperiodicity = aperiodicity;
 source_object.coarse_ap = ap_debug;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-function vuv =...
-  D4CLoveTrain(x, fs, current_f0, current_position, lowest_f0, threshold)
+function vuv = D4CLoveTrain(x, fs, current_f0, current_position, threshold)
 vuv = 0;
 if current_f0 == 0
   return;
 end;
 
-f0_floor = 100;
+lowest_f0 = 40;
+current_f0 = max(current_f0, lowest_f0);
 fft_size = 2 ^ ceil(log2(3 * fs / lowest_f0 + 1));
-boundary0 = ceil(f0_floor / (fs / fft_size)) + 1;
+% Cumulative powers at 100, 4000, 7900 Hz are used for VUV identification.
+boundary0 = ceil(100 / (fs / fft_size)) + 1;
 boundary1 = ceil(4000 / (fs / fft_size)) + 1;
 boundary2 = ceil(7900 / (fs / fft_size)) + 1;
 
@@ -102,10 +113,10 @@ end;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 function coarse_aperiodicity = EstimateOneSlice(x, fs, current_f0,...
-  frequency_interval, current_position, fft_size, number_of_aperiodicity,...
+  frequency_interval, current_position, fft_size, number_of_aperiodicities,...
   window)
 if current_f0 == 0
-  coarse_aperiodicity = zeros(number_of_aperiodicity, 1);
+  coarse_aperiodicity = zeros(number_of_aperiodicities, 1);
   return;
 end;
 
@@ -119,15 +130,14 @@ static_group_delay =...
   current_f0, fft_size);
 coarse_aperiodicity =...
   GetCoarseAperiodicity(static_group_delay, fs, fft_size,...
-  frequency_interval, number_of_aperiodicity, window);
+  frequency_interval, number_of_aperiodicities, window);
   
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 function waveform = GetWindowedWaveform(x, fs, current_f0, current_position,...
   half_length, window_type) % 1: hanning, 2: blackman
 %  prepare internal variables
-fragment_index = 0 : round(half_length * fs / current_f0);
-number_of_fragments = length(fragment_index);
-base_index = [-fragment_index(number_of_fragments : -1 : 2), fragment_index]';
+half_window_length = round(half_length * fs / current_f0);
+base_index = (-half_window_length : half_window_length)';
 index = round(current_position * fs + 0.001) + 1 + base_index;
 safe_index = min(length(x), max(1, round(index)));
 
