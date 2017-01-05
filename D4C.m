@@ -15,7 +15,8 @@ function source_object = D4C(x, fs, f0_object, option)
 %
 % 2015/05/29 : First version was released.
 % 2016/12/26 : D4C Love Train is implemented.
-% 2016/12/28: Refactoring
+% 2016/12/28 : Refactoring
+% 2016/12/31 : Minor bugs and a lengthy processing were fixed.
 
 threshold = 0.85;
 if nargin == 4
@@ -53,29 +54,22 @@ ap_debug = zeros(number_of_aperiodicity, length(f0));
 frequency_axis = (0 : fft_size_for_spectrum / 2) * fs / fft_size_for_spectrum;
 coarse_axis = [(0 : number_of_aperiodicity) * frequency_interval, fs / 2]';
 
-% D4C Love Train (Aperiodicity of 0 Hz is given by the different algorithm)
-aperiodicity0 =...
-  GetAperiodicityZero(x, fs, f0, temporal_positions,...
-  min([f0_object.f0(f0_object.f0 ~= 0), 40]));
-
+lowest_f0 = 40;
 fft_size = 2 ^ ceil(log2(4 * fs / f0_low_limit + 1));
 for i = 1 : length(f0)
-  if f0(i) == 0; aperiodicity(:, i) = 0; continue; end;
+  if D4CLoveTrain(x, fs, f0(i), temporal_positions(i), lowest_f0, threshold) == 0
+    aperiodicity(:, i) = 1 - 0.000000000001;
+    continue;
+  end;
   coarse_aperiodicity = EstimateOneSlice(x, fs, f0(i),...
     frequency_interval, temporal_positions(i), fft_size,...
     number_of_aperiodicity, window);
   coarse_aperiodicity =...
     max(0, coarse_aperiodicity - (f0(i) - 100) * 2 / 100);
   ap_debug(:, i) = -coarse_aperiodicity; % for debug;
-  if aperiodicity0(i) > threshold
-    tmp = -60;
-  else
-    tmp = 0.000000000001;
-    coarse_aperiodicity = coarse_aperiodicity * 0 + tmp;
-  end;
-
+  
   aperiodicity(:, i) = 10 .^...
-    (interp1(coarse_axis, [tmp; -coarse_aperiodicity(:); 0],...
+    (interp1(coarse_axis, [-60; -coarse_aperiodicity(:); -0.000000000001],...
     frequency_axis, 'linear') / 20);
 end;
 
@@ -83,25 +77,27 @@ source_object.aperiodicity = aperiodicity;
 source_object.coarse_ap = ap_debug;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-function aperiodicity0 =...
-  GetAperiodicityZero(x, fs, f0, temporal_positions, lowest_f0)
+function vuv =...
+  D4CLoveTrain(x, fs, current_f0, current_position, lowest_f0, threshold)
+vuv = 0;
+if current_f0 == 0
+  return;
+end;
+
 f0_floor = 100;
 fft_size = 2 ^ ceil(log2(3 * fs / lowest_f0 + 1));
 boundary0 = ceil(f0_floor / (fs / fft_size)) + 1;
 boundary1 = ceil(4000 / (fs / fft_size)) + 1;
 boundary2 = ceil(7900 / (fs / fft_size)) + 1;
-aperiodicity0 = zeros(length(f0), 1);
-for i = 1 : length(temporal_positions)
-  if f0(i) ==  0; continue; end;
 
-  waveform =...
-    GetWindowedWaveform(x, fs, f0(i), temporal_positions(i), 1.5, 2);
-  power_spectrum = abs(fft(waveform, fft_size)) .^ 2;
-  power_spectrum(1 : boundary0) = 0.0;
-  cumlative_epower_spectrum = cumsum(power_spectrum);
+waveform =...
+  GetWindowedWaveform(x, fs, current_f0, current_position, 1.5, 2);
+power_spectrum = abs(fft(waveform, fft_size)) .^ 2;
+power_spectrum(1 : boundary0) = 0.0;
+cumlative_spectrum = cumsum(power_spectrum);
 
-  aperiodicity0(i) = cumlative_epower_spectrum(boundary1) /...
-    cumlative_epower_spectrum(boundary2);
+if cumlative_spectrum(boundary1) / cumlative_spectrum(boundary2) > threshold
+  vuv = 1;
 end;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -161,12 +157,12 @@ waveform1 = GetWindowedWaveform(x, fs, current_f0,...
   current_position + 1 / current_f0 / 4, 2, 2);
 waveform2 = GetWindowedWaveform(x, fs, current_f0,...
   current_position - 1 / current_f0 / 4, 2, 2);
-centroid1 = EetCentroid(waveform1, fft_size);
-centroid2 = EetCentroid(waveform2, fft_size);
+centroid1 = GetCentroid(waveform1, fft_size);
+centroid2 = GetCentroid(waveform2, fft_size);
 centroid = DCCorrection(centroid1 + centroid2, fs, fft_size, current_f0);
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-function centroid = EetCentroid(x, fft_size)
+function centroid = GetCentroid(x, fft_size)
 time_axis = (1 : length(x))';
 x = x(:) ./ sqrt(sum(x.^2));
 

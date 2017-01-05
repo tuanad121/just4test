@@ -2,14 +2,13 @@ function y = Synthesis(source_object, filter_object)
 % Waveform synthesis from the estimated parameters
 % y = Synthesis(source_object, filter_object)
 %
-% Input
+% Inputs
 %   source_object : F0 and aperiodicity
 %   filter_object : spectral envelope
-%
 % Output
 %   y : synthesized waveform
 %
-% 2016/12/28: Refactoring
+% 2016/12/31 : Safeguard was modified.
 
 vuv = source_object.vuv;
 spectrogram = filter_object.spectrogram;
@@ -18,11 +17,11 @@ f0 = source_object.f0;
 fs = filter_object.fs;
 temporal_positions = source_object.temporal_positions;
 
-time_axis = temporal_positions(1) : 1 / fs : temporal_positions(end);
-y = 0 * time_axis';
+signal_time = temporal_positions(1) : 1 / fs : temporal_positions(end);
+y = 0 * signal_time';
 
 [pulse_locations, pulse_locations_index, interpolated_vuv] = ...
-  TimeBaseGeneration(temporal_positions, f0, fs, vuv, time_axis, default_f0);
+  TimeBaseGeneration(temporal_positions, f0, fs, vuv, signal_time, default_f0);
 
 fft_size = (size(spectrogram, 1) - 1) * 2;
 base_index = -fft_size / 2 + 1 : fft_size / 2;
@@ -35,8 +34,10 @@ temporal_position_index = interp1(temporal_positions, ...
 temporal_position_index = max(1, min(length(temporal_positions),...
   temporal_position_index));
 
-amplitude_aperiodic = source_object.aperiodicity .^ 2;
-amplitude_periodic = max(0.001, (1 - amplitude_aperiodic));
+% amplitude_aperiodic = source_object.aperiodicity .^ 2;
+amplitude_aperiodic =...
+  min(1 - 0.000000000001, max(0.001, source_object.aperiodicity .^ 2));
+amplitude_periodic = 1 - amplitude_aperiodic;
 
 for i = 1 : length(pulse_locations_index)
   [spectrum_slice, periodic_slice, aperiodic_slice] = ...
@@ -49,9 +50,11 @@ for i = 1 : length(pulse_locations_index)
   output_buffer_index = ...
     max(1, min(y_length, pulse_locations_index(i) + base_index));
   
-  if interpolated_vuv(pulse_locations_index(i)) >= 0.5
+  if interpolated_vuv(pulse_locations_index(i)) <= 0.5 ||...
+      aperiodic_slice(1) > 0.999
+    tmp_aperiodic_spectrum = spectrum_slice;
+  else
     tmp_periodic_spectrum = spectrum_slice .* periodic_slice;
-    tmp_periodic_spectrum(tmp_periodic_spectrum == 0) = eps;
     periodic_spectrum =...
       [tmp_periodic_spectrum; tmp_periodic_spectrum(end - 1 : -1 : 2)];
     
@@ -63,11 +66,8 @@ for i = 1 : length(pulse_locations_index)
     y(output_buffer_index) =...
       y(output_buffer_index) + response * sqrt(max(1, noise_size));
     tmp_aperiodic_spectrum = spectrum_slice .* aperiodic_slice;
-  else
-    tmp_aperiodic_spectrum = spectrum_slice;
   end;
   
-  tmp_aperiodic_spectrum(tmp_aperiodic_spectrum == 0) = eps;
   aperiodic_spectrum =...
     [tmp_aperiodic_spectrum; tmp_aperiodic_spectrum(end - 1 : -1 : 2)];
   tmp_cepstrum = real(fft(log(abs(aperiodic_spectrum)') / 2));
@@ -82,19 +82,19 @@ end;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 function [pulse_locations, pulse_locations_index, vuv_interpolated] = ...
-  TimeBaseGeneration(temporal_positions, f0, fs, vuv, time_axis, default_f0)
+  TimeBaseGeneration(temporal_positions, f0, fs, vuv, signal_time, default_f0)
 
 f0_interpolated_raw = ...
-  interp1(temporal_positions, f0, time_axis, 'linear', 'extrap');
+  interp1(temporal_positions, f0, signal_time, 'linear', 'extrap');
 vuv_interpolated = ...
-  interp1(temporal_positions, vuv, time_axis, 'linear', 'extrap');
+  interp1(temporal_positions, vuv, signal_time, 'linear', 'extrap');
 vuv_interpolated = vuv_interpolated > 0.5;
 f0_interpolated = f0_interpolated_raw .* vuv_interpolated;
 f0_interpolated(f0_interpolated == 0) = ...
   f0_interpolated(f0_interpolated == 0) + default_f0;
 
 total_phase = cumsum(2 * pi * f0_interpolated / fs);
-pulse_locations = time_axis(abs(diff(rem(total_phase, 2 * pi))) > pi / 2);
+pulse_locations = signal_time(abs(diff(rem(total_phase, 2 * pi))) > pi / 2);
 pulse_locations_index = round(pulse_locations * fs) + 1;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
