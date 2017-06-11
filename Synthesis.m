@@ -60,6 +60,7 @@ for i = 1 : length(pulse_locations_index)
     tmp_complex_cepstrum(1) = tmp_cepstrum(1);
     
     response = fftshift(real(ifft(exp(ifft(tmp_complex_cepstrum)))));
+    response = response - mean(response);
     y(output_buffer_index) =...
       y(output_buffer_index) + response * sqrt(max(1, noise_size));
     tmp_aperiodic_spectrum = spectrum_slice .* aperiodic_slice;
