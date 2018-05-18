@@ -15,6 +15,7 @@ function f0_parameter = Harvest(x, fs, option)
 % 2016/12/18: First version.
 % 2016/12/19: Frame period became controllable.
 % 2016/12/28: Refactoring
+% 2018/03/10: Minor bug was fixed
 
 % set parameters
 if nargin == 2
@@ -39,7 +40,8 @@ boundary_f0_list = adjusted_f0_floor * 2.0 .^...
 
 % down-sampling to target_fs Hz
 [y, actual_fs] = GetDownsampledSignal(x, fs, target_fs);
-fft_size = 2 ^ ceil(log2(length(y) + round(fs / f0_floor * 4) + 1));
+fft_size = 2 ^ ceil(log2(length(y) +...
+  2 * (2 + floor(actual_fs / boundary_f0_list(1) * 2)) + 1));
 y_spectrum = fft(y, fft_size);
 
 raw_f0_candidates = GetRawF0Candidates(...
